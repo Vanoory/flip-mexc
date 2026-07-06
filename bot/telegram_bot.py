@@ -119,6 +119,12 @@ async def cmd_help(msg: Message):
         "/size <число> — % депозита в маржу (сейчас "
         f"{STATE.settings['position_pct']}%)\n"
         "/cooldown <мин> <макс> — пауза между сделками, сек\n"
+        "/volume <млн$> — мин. 24ч объём пары (сейчас "
+        f"{STATE.settings['min_volume_24h_usd'] / 1e6:g} млн $)\n"
+        "/depth <N> — стакан должен вмещать N позиций (сейчас "
+        f"{STATE.settings['depth_multiplier']:g}x)\n"
+        "/maxmove <%> — анти-памп, макс. ход цены за минуту (сейчас "
+        f"{STATE.settings['max_move_1m_pct']:g}%)\n"
         "/pairs — список торгуемых zero-fee пар\n"
         "/blacklist — запрещённые биржей пары (clear — очистить)\n"
         "/stats — статистика\n"
@@ -243,6 +249,52 @@ async def cmd_cooldown(msg: Message, command: CommandObject):
     STATE.set_setting("cooldown_min_sec", lo)
     STATE.set_setting("cooldown_max_sec", hi)
     await msg.answer(f"✅ Кулдаун между сделками: {lo}–{hi} сек")
+
+
+@dp.message(Command("volume"))
+async def cmd_volume(msg: Message, command: CommandObject):
+    if not _is_admin(msg.from_user.id):
+        return
+    val = _parse_float(command)
+    if val is None or not 0.1 <= val <= 1000:
+        await msg.answer(
+            "Использование: /volume 20  (мин. 24ч объём пары в млн $, от 0.1 до 1000)\n"
+            f"Сейчас: {STATE.settings['min_volume_24h_usd'] / 1e6:g} млн $"
+        )
+        return
+    STATE.set_setting("min_volume_24h_usd", val * 1e6)
+    ENGINE._pairs_loaded_at = 0  # форсируем пересбор списка пар
+    await msg.answer(f"✅ Мин. 24ч объём: {val:g} млн $ (список пар обновится при следующем скане)")
+
+
+@dp.message(Command("depth"))
+async def cmd_depth(msg: Message, command: CommandObject):
+    if not _is_admin(msg.from_user.id):
+        return
+    val = _parse_float(command)
+    if val is None or not 1 <= val <= 200:
+        await msg.answer(
+            "Использование: /depth 20  (стакан возле цены должен вмещать N позиций, от 1 до 200)\n"
+            f"Сейчас: {STATE.settings['depth_multiplier']:g}x"
+        )
+        return
+    STATE.set_setting("depth_multiplier", val)
+    await msg.answer(f"✅ Требование к стакану: ≥{val:g}x размера позиции возле цены")
+
+
+@dp.message(Command("maxmove"))
+async def cmd_maxmove(msg: Message, command: CommandObject):
+    if not _is_admin(msg.from_user.id):
+        return
+    val = _parse_float(command)
+    if val is None or not 0.1 <= val <= 20:
+        await msg.answer(
+            "Использование: /maxmove 1  (макс. движение цены за минуту в %, от 0.1 до 20)\n"
+            f"Сейчас: {STATE.settings['max_move_1m_pct']:g}%"
+        )
+        return
+    STATE.set_setting("max_move_1m_pct", val)
+    await msg.answer(f"✅ Анти-памп: пропускаем монеты с движением > {val:g}%/мин")
 
 
 @dp.message(Command("pairs"))
