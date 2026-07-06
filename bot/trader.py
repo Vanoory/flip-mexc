@@ -143,6 +143,18 @@ class Trader:
             )
         except MexcError as e:
             self.last_error = str(e)
+            err = str(e)
+            # 8950 и подобные: биржа запрещает открывать позиции по паре в регионе —
+            # заносим пару в чёрный список навсегда и больше не тратим на неё попытки
+            if "8950" in err or "unavailable in your country" in err:
+                STATE.blacklist_symbol(plan.symbol, "региональное ограничение MEXC (код 8950)")
+                ENGINE.pairs = [c for c in ENGINE.pairs if c.get("symbol") != plan.symbol]
+                await self.notify(
+                    f"🚫 {plan.symbol}: MEXC запрещает открывать позиции по этой паре "
+                    f"в вашем регионе. Пара добавлена в чёрный список "
+                    f"({len(STATE.blacklist)} шт.), бот её больше не торгует."
+                )
+                return  # без кулдауна — сразу ищем следующий сигнал
             await self.notify(f"❌ Не удалось открыть {plan.direction} {plan.symbol}: {e}")
             self._set_cooldown()
             return

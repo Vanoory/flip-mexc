@@ -56,6 +56,8 @@ class SpreadEngine:
                 continue
             if sym not in zero_fee:
                 continue
+            if sym in STATE.blacklist:  # пары, запрещённые биржей для региона
+                continue
             if not BINANCE.has_symbol(mexc_to_binance_symbol(sym)):
                 continue
             t = tickers.get(sym)
@@ -88,6 +90,8 @@ class SpreadEngine:
 
         for c in self.pairs:
             sym = c["symbol"]
+            if sym in STATE.blacklist:
+                continue
             t = tickers.get(sym)
             if not t:
                 continue

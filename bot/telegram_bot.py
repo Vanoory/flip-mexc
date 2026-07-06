@@ -119,6 +119,7 @@ async def cmd_help(msg: Message):
         f"{STATE.settings['position_pct']}%)\n"
         "/cooldown <мин> <макс> — пауза между сделками, сек\n"
         "/pairs — список торгуемых zero-fee пар\n"
+        "/blacklist — запрещённые биржей пары (clear — очистить)\n"
         "/stats — статистика\n"
         "/close — закрыть текущую позицию"
     )
@@ -258,6 +259,26 @@ async def cmd_pairs(msg: Message):
     names = [c["symbol"] for c in ENGINE.pairs]
     text = f"Торгуемых пар: {len(names)}\n" + ", ".join(names)
     await msg.answer(text[:4000])
+
+
+@dp.message(Command("blacklist"))
+async def cmd_blacklist(msg: Message, command: CommandObject):
+    if not _is_admin(msg.from_user.id):
+        return
+    if command.args and command.args.strip().lower() == "clear":
+        n = len(STATE.blacklist)
+        STATE.blacklist = {}
+        STATE.save()
+        await msg.answer(f"✅ Чёрный список очищен ({n} пар удалено)")
+        return
+    if not STATE.blacklist:
+        await msg.answer("Чёрный список пуст.")
+        return
+    lines = [f"{sym} — {reason}" for sym, reason in STATE.blacklist.items()]
+    await msg.answer(
+        (f"Чёрный список ({len(lines)} пар):\n" + "\n".join(lines))[:4000]
+        + "\n\nОчистить: /blacklist clear"
+    )
 
 
 @dp.message(Command("stats"))

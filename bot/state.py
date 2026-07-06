@@ -22,6 +22,7 @@ class State:
         }
         self.trade_history: list[dict] = []   # последние 200 сделок
         self.open_position: dict | None = None
+        self.blacklist: dict[str, str] = {}   # symbol -> причина (запрещённые биржей пары)
         self._load()
 
     # ---------- persistence ----------
@@ -38,6 +39,7 @@ class State:
             self.stats = {**self.stats, **data.get("stats", {})}
             self.trade_history = data.get("trade_history", [])
             self.open_position = data.get("open_position")
+            self.blacklist = data.get("blacklist", {})
         except Exception:
             pass  # повреждённый файл — начинаем с дефолтов
 
@@ -51,6 +53,7 @@ class State:
                         "stats": self.stats,
                         "trade_history": self.trade_history[-200:],
                         "open_position": self.open_position,
+                        "blacklist": self.blacklist,
                     },
                     f,
                     ensure_ascii=False,
@@ -62,6 +65,10 @@ class State:
 
     def set_setting(self, key: str, value):
         self.settings[key] = value
+        self.save()
+
+    def blacklist_symbol(self, symbol: str, reason: str):
+        self.blacklist[symbol] = reason
         self.save()
 
     def record_trade(self, trade: dict):
