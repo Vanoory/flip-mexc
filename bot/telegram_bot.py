@@ -303,25 +303,37 @@ async def cmd_close(msg: Message):
 # Инлайн-кнопки
 # ----------------------------------------------------------------------
 
+async def _ack(cb: CallbackQuery, text: str | None = None):
+    """Ответ на callback без падения: старые кнопки (query is too old) игнорируем."""
+    try:
+        await cb.answer(text)
+    except Exception as e:
+        log.debug("callback answer не доставлен (устаревшая кнопка): %s", e)
+
+
 @dp.callback_query(F.data.in_({"start", "stop", "stats", "close"}))
 async def on_button(cb: CallbackQuery):
     if not _is_admin(cb.from_user.id):
-        await cb.answer()
+        await _ack(cb)
         return
-    if cb.data == "start":
-        STATE.set_setting("trading_enabled", True)
-        await cb.message.edit_text(_status_text(), reply_markup=_status_keyboard())
-        await cb.answer("Торговля запущена")
-    elif cb.data == "stop":
-        STATE.set_setting("trading_enabled", False)
-        await cb.message.edit_text(_status_text(), reply_markup=_status_keyboard())
-        await cb.answer("Торговля остановлена")
-    elif cb.data == "stats":
-        await cb.message.answer(_stats_text())
-        await cb.answer()
-    elif cb.data == "close":
-        await cb.answer("Закрываю позицию...")
-        await TRADER.close_position(reason="закрыто вручную (кнопка)")
+    try:
+        if cb.data == "start":
+            STATE.set_setting("trading_enabled", True)
+            await _ack(cb, "Торговля запущена")
+            await cb.message.edit_text(_status_text(), reply_markup=_status_keyboard())
+        elif cb.data == "stop":
+            STATE.set_setting("trading_enabled", False)
+            await _ack(cb, "Торговля остановлена")
+            await cb.message.edit_text(_status_text(), reply_markup=_status_keyboard())
+        elif cb.data == "stats":
+            await _ack(cb)
+            await cb.message.answer(_stats_text())
+        elif cb.data == "close":
+            await _ack(cb, "Закрываю позицию...")
+            await TRADER.close_position(reason="закрыто вручную (кнопка)")
+    except Exception as e:
+        # ни одна ошибка обработчика не должна ронять polling
+        log.warning("Ошибка обработки кнопки %s: %s", cb.data, e)
 
 
 async def run_telegram():
