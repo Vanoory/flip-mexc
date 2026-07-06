@@ -1,7 +1,11 @@
 """Расчёт размера позиции, стоп-лосса и тейк-профита.
 
-Ключевая идея: стоп-лосс считается ОТ ДЕПОЗИТА, а не от цены.
-При срабатывании стопа теряется ровно settings['stop_loss_pct'] % депозита.
+Логика RR (risk/reward):
+1. TP определяется схождением спреда -> известна дистанция тейка по цене.
+2. Дистанция стопа = дистанция тейка / RR (RR=1 -> 1:1, RR=2 -> стоп вдвое ближе тейка).
+3. Размер позиции (нотионал/маржа) подбирается так, чтобы при срабатывании
+   стопа терялось ровно settings['stop_loss_pct'] % депозита:
+   notional = max_loss / stop_distance.
 """
 import logging
 import math
@@ -22,6 +26,7 @@ class PositionPlan:
     stop_loss_price: float
     take_profit_price: float
     stop_distance_pct: float
+    tp_distance_pct: float
     max_loss_usd: float
     expected_profit_usd: float
 
@@ -51,39 +56,63 @@ def build_position_plan(
     min_vol = float(contract.get("minVol", 1)) or 1
     price_scale = int(contract.get("priceScale", 4))
 
+    rr = float(settings.get("risk_reward", 1.0))  # RR = дистанция TP / дистанция SL
     max_loss_usd = balance_usd * settings["stop_loss_pct"] / 100.0
-    margin_usd = balance_usd * settings["position_pct"] / 100.0
-    notional = margin_usd * max_leverage
 
-    # Дистанция стопа в % от цены, при которой убыток = max_loss_usd
-    stop_distance_pct = max_loss_usd / notional * 100.0
+    # ------------------------------------------------------------------
+    # 1. TP: цена MEXC, при которой спред сойдётся к exit_threshold
+    # ------------------------------------------------------------------
+    if direction == "LONG":
+        tp = round(binance_price * (1 - settings["exit_threshold"] / 100.0), price_scale)
+        if tp <= mexc_price:
+            return None, "TP ниже цены входа (спред уже сошёлся)"
+        tp_distance_pct = (tp - mexc_price) / mexc_price * 100.0
+    else:
+        tp = round(binance_price * (1 + settings["exit_threshold"] / 100.0), price_scale)
+        if tp >= mexc_price:
+            return None, "TP выше цены входа (спред уже сошёлся)"
+        tp_distance_pct = (mexc_price - tp) / mexc_price * 100.0
 
-    # Если стоп получился слишком близко (шум стакана выбьет мгновенно) —
-    # уменьшаем нотионал так, чтобы стоп был не ближе минимума,
-    # а убыток при стопе остался равным max_loss_usd.
+    # ------------------------------------------------------------------
+    # 2. SL: дистанция стопа по цене = дистанция тейка / RR
+    # ------------------------------------------------------------------
+    stop_distance_pct = tp_distance_pct / rr
     min_stop = settings["min_stop_distance_pct"]
     if stop_distance_pct < min_stop:
-        notional = max_loss_usd / (min_stop / 100.0)
-        margin_usd = notional / max_leverage
-        stop_distance_pct = min_stop
+        return None, (
+            f"стоп {stop_distance_pct:.3f}% ближе минимума {min_stop}% "
+            f"(TP-дистанция {tp_distance_pct:.3f}%, RR 1:{rr:g}) — спред слишком мал"
+        )
 
-    # Стоп обязан сработать раньше ликвидации: маржа изолированная,
-    # ликвидация ~ на дистанции (1/leverage)*100% минус maintenance.
-    liq_distance_pct = (1.0 / max_leverage) * 100.0 * 0.8  # 20% запас на maintenance margin
+    # ------------------------------------------------------------------
+    # 3. Размер позиции: при пробое стопа теряем ровно max_loss_usd
+    # ------------------------------------------------------------------
+    notional = max_loss_usd / (stop_distance_pct / 100.0)
+
+    # маржа при максимальном плече; предохранитель — не больше position_pct% депо
+    margin_usd = notional / max_leverage
+    margin_cap = balance_usd * settings["position_pct"] / 100.0
+    if margin_usd > margin_cap:
+        # уменьшаем позицию: убыток при стопе станет МЕНЬШЕ max_loss (безопасно)
+        notional = margin_cap * max_leverage
+        margin_usd = margin_cap
+
+    # стоп обязан сработать раньше ликвидации (изолированная маржа):
+    # ликвидация ~ на дистанции (1/leverage)*100% минус maintenance (запас 20%)
+    liq_distance_pct = (1.0 / max_leverage) * 100.0 * 0.8
     if stop_distance_pct >= liq_distance_pct:
-        # снижаем плечо, чтобы стоп был до ликвидации
-        needed_lev = max(1, int((100.0 * 0.8) / (stop_distance_pct * 1.5)))
+        # снижаем плечо (нотионал не меняется — растёт только маржа)
+        needed_lev = max(1, int((100.0 * 0.8) / (stop_distance_pct * 1.25)))
         max_leverage = min(max_leverage, needed_lev)
-        notional = margin_usd * max_leverage
-        stop_distance_pct = max_loss_usd / notional * 100.0
-        if stop_distance_pct < min_stop:
-            notional = max_loss_usd / (min_stop / 100.0)
-            margin_usd = notional / max_leverage
-            stop_distance_pct = min_stop
+        margin_usd = notional / max_leverage
+        if margin_usd > margin_cap:
+            notional = margin_cap * max_leverage
+            margin_usd = margin_cap
 
-    # Фильтр «почти убыточных» входов: ожидаемый ход = спред минус порог выхода
-    # минус проскальзывание; профит должен быть >= min_profit_pct от депозита.
-    expected_move_pct = abs(spread_pct) - settings["exit_threshold"] - settings["slippage_pct"]
+    # ------------------------------------------------------------------
+    # 4. Фильтр «почти убыточных» входов: ожидаемый профит при тейке
+    # ------------------------------------------------------------------
+    expected_move_pct = tp_distance_pct - settings["slippage_pct"]
     expected_profit_usd = expected_move_pct / 100.0 * notional
     min_profit_usd = balance_usd * settings["min_profit_pct"] / 100.0
     if expected_profit_usd < min_profit_usd:
@@ -92,26 +121,21 @@ def build_position_plan(
             f"(спред {spread_pct:.3f}%)"
         )
 
-    # Объём в контрактах
+    # ------------------------------------------------------------------
+    # 5. Объём в контрактах + пересчёт под округление
+    # ------------------------------------------------------------------
     raw_vol = notional / (mexc_price * contract_size)
     vol = _round_step(raw_vol, vol_step)
     if vol < min_vol:
         return None, f"объём {raw_vol:.4f} меньше минимального {min_vol} контрактов"
     actual_notional = vol * mexc_price * contract_size
-    # пересчёт стопа под фактический нотионал (округление объёма меняет цифры)
-    stop_distance_pct = max(max_loss_usd / actual_notional * 100.0, min_stop)
+    actual_max_loss = stop_distance_pct / 100.0 * actual_notional
+    actual_profit = expected_move_pct / 100.0 * actual_notional
 
     if direction == "LONG":
         sl = round(mexc_price * (1 - stop_distance_pct / 100.0), price_scale)
-        # TP: цена MEXC, при которой спред сойдётся к exit_threshold
-        tp = round(binance_price * (1 - settings["exit_threshold"] / 100.0), price_scale)
-        if tp <= mexc_price:
-            return None, "TP ниже цены входа (спред уже сошёлся)"
     else:
         sl = round(mexc_price * (1 + stop_distance_pct / 100.0), price_scale)
-        tp = round(binance_price * (1 + settings["exit_threshold"] / 100.0), price_scale)
-        if tp >= mexc_price:
-            return None, "TP выше цены входа (спред уже сошёлся)"
 
     return (
         PositionPlan(
@@ -125,8 +149,9 @@ def build_position_plan(
             stop_loss_price=sl,
             take_profit_price=tp,
             stop_distance_pct=stop_distance_pct,
-            max_loss_usd=max_loss_usd,
-            expected_profit_usd=expected_profit_usd,
+            tp_distance_pct=tp_distance_pct,
+            max_loss_usd=actual_max_loss,
+            expected_profit_usd=actual_profit,
         ),
         "",
     )

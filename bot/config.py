@@ -31,6 +31,7 @@ class Credentials:
 DEFAULT_SETTINGS: dict = {
     "trading_enabled": False,        # торговля выключена до /start_trading
     "stop_loss_pct": 5.0,            # % депозита, теряемый при срабатывании стопа
+    "risk_reward": 1.0,              # RR по цене: дистанция TP / дистанция SL (1 = 1:1, 2 = 1:2)
     "entry_threshold": 0.3,          # % спреда для входа
     "exit_threshold": 0.05,          # % спреда для выхода (TP по схождению)
     "min_profit_pct": 0.3,           # мин. ожидаемый профит (% от депозита), иначе не входим

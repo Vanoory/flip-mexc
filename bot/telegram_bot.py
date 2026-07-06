@@ -52,7 +52,8 @@ def _status_text() -> str:
     s = STATE.settings
     lines = [
         f"Торговля: {'🟢 ВКЛ' if s['trading_enabled'] else '🔴 ВЫКЛ'}",
-        f"Стоп: {s['stop_loss_pct']}% депо | Вход: спред ≥ {s['entry_threshold']}%",
+        f"Стоп: {s['stop_loss_pct']}% депо | RR 1:{s['risk_reward']:g} | "
+        f"Вход: спред ≥ {s['entry_threshold']}%",
         f"Маржа на сделку: {s['position_pct']}% депо | "
         f"Кулдаун: {s['cooldown_min_sec']}–{s['cooldown_max_sec']} сек",
         f"Пар в списке: {len(ENGINE.pairs)}",
@@ -110,6 +111,8 @@ async def cmd_help(msg: Message):
         "/balance — баланс с биржи\n"
         "/risk <число> — % депозита при стопе (сейчас "
         f"{STATE.settings['stop_loss_pct']}%)\n"
+        "/rr <число> — RR по цене: тейк/стоп (сейчас "
+        f"1:{STATE.settings['risk_reward']:g})\n"
         "/spread <число> — порог входа в % (сейчас "
         f"{STATE.settings['entry_threshold']}%)\n"
         "/size <число> — % депозита в маржу (сейчас "
@@ -182,6 +185,23 @@ async def cmd_risk(msg: Message, command: CommandObject):
         return
     STATE.set_setting("stop_loss_pct", val)
     await msg.answer(f"✅ Стоп-лосс: {val}% от депозита")
+
+
+@dp.message(Command("rr"))
+async def cmd_rr(msg: Message, command: CommandObject):
+    if not _is_admin(msg.from_user.id):
+        return
+    val = _parse_float(command)
+    if val is None or not 0.5 <= val <= 10:
+        await msg.answer(
+            "Использование: /rr 2  (от 0.5 до 10)\n"
+            "RR по цене = дистанция тейка / дистанция стопа:\n"
+            "1 — стоп и тейк на равном расстоянии (1:1)\n"
+            "2 — тейк вдвое дальше стопа (1:2)"
+        )
+        return
+    STATE.set_setting("risk_reward", val)
+    await msg.answer(f"✅ RR по цене: 1:{val:g} (стоп = дистанция тейка / {val:g})")
 
 
 @dp.message(Command("spread"))
