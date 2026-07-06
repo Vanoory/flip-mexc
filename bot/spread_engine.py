@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass
 
 from binance_feed import BINANCE
@@ -32,7 +33,23 @@ class SpreadEngine:
         self.pairs: list[dict] = []        # контракты, прошедшие фильтры
         self._pairs_loaded_at: float = 0
         self._confirmations: dict[str, dict] = {}  # symbol -> {direction, count}
+        self._price_history: dict[str, deque] = {}  # symbol -> deque[(ts, price)]
         self.last_refresh_error: str | None = None
+
+    def _too_volatile(self, sym: str, price: float, max_move_pct: float) -> bool:
+        """Анти-памп: пропускаем монету, если цена сдвинулась > max_move_pct за минуту."""
+        now = time.time()
+        hist = self._price_history.setdefault(sym, deque(maxlen=120))
+        hist.append((now, price))
+        old = None
+        for ts, p in hist:
+            if now - ts <= 90:      # берём самую старую точку в окне ~60-90 сек
+                old = p
+                break
+        if old is None or old <= 0:
+            return False
+        move = abs(price - old) / old * 100.0
+        return move > max_move_pct
 
     # ---------- отбор пар ----------
 
@@ -99,6 +116,10 @@ class SpreadEngine:
             if bid <= 0 or ask <= 0:
                 continue
             mexc_mid = (bid + ask) / 2
+            # анти-памп: цена скачет — сигнал скорее всего "догоняющий", стоп проскользит
+            if self._too_volatile(sym, mexc_mid, settings.get("max_move_1m_pct", 1.0)):
+                self._confirmations.pop(sym, None)
+                continue
             binance_mid = BINANCE.mid_price(mexc_to_binance_symbol(sym))
             if not binance_mid:
                 continue
@@ -142,6 +163,42 @@ class SpreadEngine:
                 self._confirmations.pop(sym, None)
 
         return best
+
+    async def check_liquidity(self, sig: Signal, notional_usd: float) -> tuple[bool, str]:
+        """Глубина стакана: в пределах depth_range_pct от цены должно лежать
+        минимум depth_multiplier * размер позиции С ОБЕИХ сторон — иначе стоп
+        проскользит сквозь тонкий стакан и убыток будет кратно больше плана."""
+        settings = STATE.settings
+        rng = settings.get("depth_range_pct", 0.3) / 100.0
+        mult = settings.get("depth_multiplier", 20.0)
+        contract_size = float(sig.contract.get("contractSize", 1))
+        try:
+            depth = await MEXC.depth(sig.symbol, limit=50)
+        except Exception as e:
+            return False, f"не получили стакан: {e}"
+        bids, asks = depth.get("bids", []), depth.get("asks", [])
+        if not bids or not asks:
+            return False, "пустой стакан"
+        mid = (float(bids[0][0]) + float(asks[0][0])) / 2
+
+        def side_depth_usd(levels) -> float:
+            total = 0.0
+            for lv in levels:
+                price, vol = float(lv[0]), float(lv[1])
+                if abs(price - mid) / mid > rng:
+                    break
+                total += price * vol * contract_size
+            return total
+
+        bid_usd, ask_usd = side_depth_usd(bids), side_depth_usd(asks)
+        need = notional_usd * mult
+        weakest = min(bid_usd, ask_usd)
+        if weakest < need:
+            return False, (
+                f"тонкий стакан: {weakest:,.0f}$ в ±{rng*100:.1f}% от цены, "
+                f"нужно ≥{need:,.0f}$ ({mult:g}x позиции {notional_usd:,.0f}$)"
+            )
+        return True, ""
 
     async def verify_signal(self, sig: Signal) -> Signal | None:
         """Перед входом перепроверяем спред по стакану MEXC (а не по тикеру)."""

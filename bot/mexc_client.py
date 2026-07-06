@@ -69,8 +69,8 @@ class MexcClient:
         """Тикеры всех контрактов: bid1/ask1/lastPrice/volume24/amount24."""
         return await self._public("/api/v1/contract/ticker")
 
-    async def depth(self, symbol: str) -> dict:
-        return await self._public(f"/api/v1/contract/depth/{symbol}", {"limit": 5})
+    async def depth(self, symbol: str, limit: int = 5) -> dict:
+        return await self._public(f"/api/v1/contract/depth/{symbol}", {"limit": limit})
 
     # ------------------------------------------------------------------
     # WEB-токен: подпись и запросы
@@ -163,7 +163,7 @@ class MexcClient:
     async def zero_fee_symbols(self) -> set[str]:
         """Пары с нулевой комиссией для аккаунта. Список зависит от аккаунта.
 
-        Пробуем приватный эндпоинт; при неудаче — фолбэк на публичные ставки
+        Пробуем приватный эндпоинт; при неудаче — фолбэк на публи��ные ставки
         (takerFeeRate == 0 в contract/detail).
         """
         try:

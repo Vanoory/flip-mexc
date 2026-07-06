@@ -125,6 +125,13 @@ class Trader:
             log.info("Вход в %s отклонён: %s", sig.symbol, reject)
             return
 
+        # фильтр ликвидности: стакан должен вмещать позицию с большим запасом,
+        # иначе стоп проскользит и убыток будет кратно больше запланированного
+        liq_ok, liq_reason = await ENGINE.check_liquidity(sig, plan.notional_usd)
+        if not liq_ok:
+            log.info("Вход в %s отклонён по ликвидности: %s", sig.symbol, liq_reason)
+            return
+
         position_type = 1 if plan.direction == "LONG" else 2
         try:
             await MEXC.set_leverage(plan.symbol, plan.leverage, position_type)
