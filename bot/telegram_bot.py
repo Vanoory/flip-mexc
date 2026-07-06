@@ -1,4 +1,5 @@
 """Telegram-бот управления (aiogram v3). Доступ только для TELEGRAM_ADMIN_ID."""
+import asyncio
 import logging
 import time
 
@@ -337,7 +338,22 @@ async def on_button(cb: CallbackQuery):
 
 
 async def run_telegram():
+    """Polling с авто-перезапуском: сетевые сбои Telegram не должны ронять бота.
+
+    Торговый цикл работает отдельной задачей, поэтому даже пока Telegram
+    недоступен, бот продолжает торговать — уведомления просто отложатся.
+    """
     if not bot:
         log.error("TELEGRAM_BOT_TOKEN не задан — Telegram-бот не запущен")
         return
-    await dp.start_polling(bot)
+    backoff = 3
+    while True:
+        try:
+            await dp.start_polling(bot, handle_signals=False)
+            log.warning("Polling завершился без ошибки — перезапуск через %d сек", backoff)
+        except asyncio.CancelledError:
+            raise  # Ctrl+C / завершение процесса — выходим честно
+        except Exception as e:
+            log.error("Polling упал: %s — перезапуск через %d сек", e, backoff)
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, 60)  # 3с → 6с → ... → максимум 60с
