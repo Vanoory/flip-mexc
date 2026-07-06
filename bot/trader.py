@@ -171,6 +171,7 @@ class Trader:
             "take_profit_price": plan.take_profit_price,
             "balance_at_entry": equity,
             "entry_spread_pct": sig.spread_pct,
+            "price_scale": int(sig.contract.get("priceScale", 6)),
             "opened_at": time.time(),
         }
         STATE.save()
@@ -245,8 +246,20 @@ class Trader:
                 symbol=pos["symbol"], side=side, vol=pos["vol"], leverage=pos["leverage"]
             )
         except MexcError as e:
+            log.warning("Ошибка закрытия %s маркетом: %s", pos["symbol"], e)
+            err = str(e)
+            # 2078: цена исполнения за ценой ликвидации — биржа требует лимитный ордер
+            if "2078" in err or "liquidation price" in err:
+                if await self._close_with_limit(pos, side):
+                    await self._finalize_closed_position(reason=reason + " (лимитным ордером)",
+                                                         exit_price=exit_price)
+                    return
+                await self.notify(
+                    f"❌ НЕ УДАЛОСЬ закрыть {pos['symbol']} даже лимитным ордером — "
+                    f"закройте вручную на бирже!"
+                )
+                return
             # позиция могла уже закрыться биржевым SL/TP
-            log.warning("Ошибка закрытия %s: %s", pos["symbol"], e)
             try:
                 live = await MEXC.open_positions()
                 if any(p.get("symbol") == pos["symbol"] for p in live):
@@ -256,6 +269,59 @@ class Trader:
                 await self.notify(f"⚠️ Ошибка закрытия {pos['symbol']}: {e} — проверьте биржу!")
                 return
         await self._finalize_closed_position(reason=reason, exit_price=exit_price)
+
+    async def _close_with_limit(self, pos: dict, side: int, attempts: int = 4) -> bool:
+        """Закрытие агрессивным лимитным ордером (фолбэк при ошибке 2078).
+
+        Лимитная цена ставится чуть 'хуже' рынка, чтобы ордер исполнился сразу
+        как маркет, но не выходил за цену ликвидации.
+        """
+        # цена ликвидации с биржи — лимитку нельзя ставить за ней
+        liq_price = None
+        try:
+            live = await MEXC.open_positions()
+            for p in live:
+                if p.get("symbol") == pos["symbol"]:
+                    liq_price = float(p.get("liquidatePrice") or 0) or None
+                    break
+            else:
+                return True  # позиции уже нет — закрыта биржей
+        except Exception:
+            pass
+
+        price_scale = int(pos.get("price_scale", 6))
+        for attempt in range(attempts):
+            try:
+                depth = await MEXC.depth(pos["symbol"])
+                bids, asks = depth.get("bids", []), depth.get("asks", [])
+                if not bids or not asks:
+                    await asyncio.sleep(1.5)
+                    continue
+                if side == SIDE_CLOSE_SHORT:   # откупаем шорт: чуть выше ask
+                    price = float(asks[0][0]) * 1.002
+                    if liq_price:
+                        price = min(price, liq_price * 0.999)  # не за ликвидацией
+                else:                          # продаём лонг: чуть ниже bid
+                    price = float(bids[0][0]) * 0.998
+                    if liq_price:
+                        price = max(price, liq_price * 1.001)
+                price = round(price, price_scale)
+                await MEXC.place_order(
+                    symbol=pos["symbol"], side=side, vol=pos["vol"],
+                    leverage=pos["leverage"], price=price,
+                )
+                # проверяем что позиция действительно закрылась
+                await asyncio.sleep(2)
+                live = await MEXC.open_positions()
+                if not any(p.get("symbol") == pos["symbol"] for p in live):
+                    return True
+                log.warning("Лимитка на закрытие %s не исполнилась (попытка %d)",
+                            pos["symbol"], attempt + 1)
+            except MexcError as e:
+                log.warning("Лимитное закрытие %s, попытка %d: %s",
+                            pos["symbol"], attempt + 1, e)
+            await asyncio.sleep(2)
+        return False
 
     async def _finalize_closed_position(self, reason: str, exit_price: float | None = None):
         pos = STATE.open_position

@@ -213,8 +213,10 @@ class MexcClient:
         leverage: int,
         stop_loss_price: float | None = None,
         take_profit_price: float | None = None,
+        price: float | None = None,   # если задана — лимитный ордер (type=1)
     ) -> dict:
-        """Маркет-ордер (type=5), изолированная маржа (openType=1)."""
+        """Ордер: маркет (type=5) по умолчанию, лимитный (type=1) если задана price.
+        Изолированная маржа (openType=1)."""
         order = {
             "symbol": symbol,
             "side": side,
@@ -223,6 +225,9 @@ class MexcClient:
             "vol": vol,
             "leverage": leverage,
         }
+        if price is not None:
+            order["type"] = 1
+            order["price"] = price
         if stop_loss_price:
             order["stopLossPrice"] = stop_loss_price
         if take_profit_price:
