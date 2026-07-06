@@ -36,16 +36,10 @@ python main.py
 
 ## Настройка .env
 
-### 1. MEXC API key
-mexc.com → Профиль → API Management → создать ключ с правами:
-- Account: View Account Details
-- Trade: View Order Details + Order Placing
-
-Используется для чтения баланса/позиций и попытки выставления ордеров.
-
-### 2. MEXC WEB-токен (важно!)
-Официальный эндпоинт открытия фьючерсных ордеров у MEXC уже давно возвращает
-"maintenance" — несмотря на галочку Order Placing. Рабочий способ — WEB-токен:
+### 1. MEXC WEB-токен (единственное, что нужно от MEXC)
+Официальные API-ключи НЕ нужны: бот полностью работает через WEB-токен —
+и чтение баланса/позиций, и открытие сделок (официальный эндпоинт фьючерс-ордеров
+у MEXC годами возвращает "maintenance", а через WEB-токен всё работает).
 
 1. Войдите на **futures.mexc.com** в браузере.
 2. F12 → вкладка **Application** (Chrome) / **Storage** (Firefox) → **Cookies** → `https://futures.mexc.com`.
@@ -55,7 +49,7 @@ mexc.com → Профиль → API Management → создать ключ с п
 Токен живёт, пока жива сессия браузера (не выходите из аккаунта). Если протух —
 бот напишет об этом в Telegram, обновите значение и перезапустите бота.
 
-### 3. Telegram
+### 2. Telegram
 1. В Telegram найдите **@BotFather** → `/newbot` → получите токен → `TELEGRAM_BOT_TOKEN`.
 2. Узнайте свой ID у **@userinfobot** → `TELEGRAM_ADMIN_ID`.
 3. Напишите своему боту `/start` (иначе он не сможет отправлять вам сообщения).

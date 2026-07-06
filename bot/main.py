@@ -25,7 +25,7 @@ async def main():
     problems = CREDS.validate()
     for p in problems:
         log.warning("Конфигурация: %s", p)
-    critical = [p for p in problems if "TELEGRAM" in p or "MEXC_API_KEY" in p]
+    critical = [p for p in problems if "TELEGRAM" in p or "MEXC_WEB_TOKEN" in p]
     if critical:
         log.error("Критические проблемы конфигурации — заполните .env и перезапустите.")
         sys.exit(1)

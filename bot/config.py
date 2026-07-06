@@ -9,25 +9,21 @@ load_dotenv()
 
 @dataclass
 class Credentials:
-    mexc_api_key: str = os.getenv("MEXC_API_KEY", "")
-    mexc_api_secret: str = os.getenv("MEXC_API_SECRET", "")
     mexc_web_token: str = os.getenv("MEXC_WEB_TOKEN", "")
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_admin_id: int = int(os.getenv("TELEGRAM_ADMIN_ID", "0"))
 
     def validate(self) -> list[str]:
         problems = []
-        if not self.mexc_api_key or not self.mexc_api_secret:
-            problems.append("MEXC_API_KEY / MEXC_API_SECRET не заданы (нужны для чтения баланса)")
+        if not self.mexc_web_token:
+            problems.append(
+                "MEXC_WEB_TOKEN не задан — без него бот не сможет читать баланс "
+                "и открывать сделки (futures.mexc.com -> F12 -> Cookies -> u_id)"
+            )
         if not self.telegram_bot_token:
             problems.append("TELEGRAM_BOT_TOKEN не задан")
         if not self.telegram_admin_id:
             problems.append("TELEGRAM_ADMIN_ID не задан")
-        if not self.mexc_web_token:
-            problems.append(
-                "MEXC_WEB_TOKEN не задан — официальный эндпоинт ордеров у MEXC 'на обслуживании', "
-                "без WEB-токена открытие сделок скорее всего не сработает"
-            )
         return problems
 
 
